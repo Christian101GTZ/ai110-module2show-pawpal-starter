@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-
+from datetime import date, timedelta
 
 @dataclass
 class Task:
@@ -8,10 +8,30 @@ class Task:
     priority: int        # 1 = high, 2 = medium, 3 = low
     category: str        # walk, feeding, meds, grooming, enrichment
     completed: bool = False
+    time: str = "08:00"  # scheduled time for this task 
+    frequency: str = "once" #once, daily, weekly, etc.
+    due_date: str = "" # YYYY-MM-DD format for tasks with specific deadlines
+  
 
-    def mark_complete(self) -> None:
+    def mark_complete(self, pet: "Pet") -> None:
         """Mark this task as completed."""
         self.completed = True
+        if self.frequency == "daily":
+            next_date = date.today() + timedelta(days=1)
+            new_task = Task(
+                name=self.name, duration=self.duration, priority=self.priority, 
+                category=self.category, time=self.time, frequency=self.frequency, 
+                due_date=str(next_date)
+            )
+            pet.add_task(new_task)
+        elif self.frequency == "weekly":
+            next_date = date.today() + timedelta(days=7)
+            new_task = Task(
+                name=self.name, duration=self.duration, priority=self.priority, 
+                category=self.category, time=self.time, frequency=self.frequency, 
+                due_date=str(next_date)
+            )
+            pet.add_task(new_task)
 
     def is_completable(self, available_time: int) -> bool:
         """Return True if this task fits within the given available time."""
@@ -24,19 +44,19 @@ class Pet:
     species: str
     age: int
     notes: str = ""
-    tasks: list[Task] = field(default_factory=list)
+    tasks: dict[str, Task] = field(default_factory=dict)
 
     def add_task(self, task: Task) -> None:
         """Add a task to this pet's task list."""
-        self.tasks.append(task)
+        self.tasks[task.name] = task
 
     def remove_task(self, task: Task) -> None:
         """Remove a task from this pet's task list."""
-        self.tasks.remove(task)
+        self.tasks.pop(task.name, None)
 
     def get_tasks(self) -> list[Task]:
-        """Return all tasks assigned to this pet."""
-        return self.tasks
+        """Return all incomplete tasks assigned to this pet."""
+        return [t for t in self.tasks.values() if not t.completed]
 
 
 @dataclass
@@ -90,6 +110,16 @@ class Scheduler:
                 reason = "not enough time" if remaining_time > 0 else "no time left"
                 self.skipped.append((pet, task, reason))
 
+        # Second pass: try to fill leftover time with skipped tasks
+        still_skipped = []
+        for pet, task, reason in self.skipped:
+            if task.is_completable(remaining_time):
+                self.daily_plan.append((pet, task))
+                remaining_time -= task.duration
+            else:
+                still_skipped.append((pet, task, reason))
+        self.skipped = still_skipped
+
         return self.daily_plan
 
     def explain_plan(self) -> str:
@@ -124,3 +154,36 @@ class Scheduler:
         """Return the number of minutes remaining after all scheduled tasks."""
         used = sum(task.duration for _, task in self.daily_plan)
         return self.owner.available_time - used
+
+    def sort_by_time(self) -> list[tuple[Pet, Task]]:
+        """return the daily plan sorted by scheduled time."""
+        all_tasks = []
+        for pest in self.pets:
+            for task in pest.get_tasks():
+                if not task.completed:
+                    all_tasks.append((pest, task))
+        return sorted(all_tasks, key=lambda x: x[1].time) 
+
+    def filter_tasks(self, pet_name: str = None, completed: bool = None) -> list[tuple[Pet, Task]]:
+        """Return tasks filtered by pet name and/or completion status."""
+        results = []
+        for pet in self.pets:
+            if pet_name and pet.name.lower() != pet_name.lower():
+                continue
+            for task in pet.tasks.values():
+                if completed is not None and task.completed != completed:
+                    continue
+                results.append((pet, task))
+        return results 
+    
+    def detect_conflicts(self) -> list[str]:
+        """Return a list of warning messages for tasks scheduled at the same time."""
+        seen, warnings = {}, []
+        for pet in self.pets:
+            for task in (t for t in pet.tasks.values() if not t.completed):
+                if task.time in seen:
+                    p, t = seen[task.time]
+                    warnings.append(f"⚠️ Conflict at {task.time}: [{pet.name}] {task.name} overlaps with [{p.name}] {t.name}")
+                else:
+                    seen[task.time] = (pet, task)
+        return warnings
